@@ -5,10 +5,13 @@ import { VISIT_SELECT } from '../sql';
 const app = new Hono<{ Bindings: Bindings }>();
 
 // GET /api/visits?date=YYYY-MM-DD&status=&upcoming=true&limit=
+// GET /api/visits?start=YYYY-MM-DD&end=YYYY-MM-DD  (inclusive range, for calendar views)
 app.get('/', async (c) => {
   const db = c.env.DB;
   const upcoming = c.req.query('upcoming');
   const status = c.req.query('status');
+  const start = c.req.query('start');
+  const end = c.req.query('end');
 
   if (upcoming === 'true') {
     const limit = Number(c.req.query('limit') ?? '5') || 5;
@@ -18,6 +21,19 @@ app.get('/', async (c) => {
       )
       .bind(limit)
       .all<Visit>();
+    return c.json(rows.results);
+  }
+
+  if (start && end) {
+    let query = `${VISIT_SELECT} WHERE date(v.scheduled_at) BETWEEN ? AND ?`;
+    const params: (string | number)[] = [start, end];
+    if (status) {
+      query += ' AND v.status = ?';
+      params.push(status);
+    }
+    query += ' ORDER BY v.scheduled_at';
+
+    const rows = await db.prepare(query).bind(...params).all<Visit>();
     return c.json(rows.results);
   }
 
@@ -53,6 +69,28 @@ app.post('/', async (c) => {
     .run();
 
   return c.json({ id: result.meta.last_row_id }, 201);
+});
+
+// PUT /api/visits/:id — edit/reschedule a visit
+app.put('/:id', async (c) => {
+  const db = c.env.DB;
+  const id = Number(c.req.param('id'));
+  const body = await c.req.json<{
+    patient_id: number;
+    doctor_id: number;
+    visit_type: string;
+    location: string;
+    scheduled_at: string;
+  }>();
+
+  await db
+    .prepare(
+      `UPDATE visits SET patient_id = ?, doctor_id = ?, visit_type = ?, location = ?, scheduled_at = ? WHERE id = ?`
+    )
+    .bind(body.patient_id, body.doctor_id, body.visit_type, body.location, body.scheduled_at, id)
+    .run();
+
+  return c.json({ status: 'ok' });
 });
 
 const VALID_STATUSES = new Set(['terjadwal', 'berlangsung', 'selesai', 'batal']);
