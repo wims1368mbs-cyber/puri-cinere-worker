@@ -29,4 +29,15 @@ app.post('/', async (c) => {
   return c.json({ id: result.meta.last_row_id }, 201);
 });
 
+app.put('/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  const body = await c.req.json<{ name: string; address: string; phone: string; status: string }>();
+
+  await c.env.DB.prepare(`UPDATE patients SET name = ?, address = ?, phone = ?, status = ? WHERE id = ?`)
+    .bind(body.name, body.address, body.phone, body.status, id)
+    .run();
+
+  return c.json({ status: 'ok' });
+});
+
 export default app;
