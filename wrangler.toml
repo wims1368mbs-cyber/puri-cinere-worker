@@ -5,7 +5,7 @@ compatibility_date = "2026-07-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "puri-cinere-db"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "a2a606f4-26aa-44da-8372-ee95459ada79"
 
-[vars]
-JWT_SECRET = "dev-secret-change-me"
+# JWT_SECRET is set via `wrangler secret put JWT_SECRET` for production,
+# and via .dev.vars (gitignored) for local `wrangler dev`.
