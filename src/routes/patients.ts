@@ -80,6 +80,57 @@ app.get('/:id', async (c) => {
   return c.json({ ...patient, conditions, risk_scores: riskScores, family_contacts: familyContacts.results });
 });
 
+// GET /api/patients/:id/risk-trend — skor risiko dihitung ulang di tiap kunjungan selesai
+// (dari data vital yang benar-benar tercatat saat itu, bukan angka rekaan)
+app.get('/:id/risk-trend', async (c) => {
+  const db = c.env.DB;
+  const id = Number(c.req.param('id'));
+
+  const patient = await db.prepare(`SELECT age, iot_fall_enabled FROM patients WHERE id = ?`).bind(id).first<{
+    age: number | null;
+    iot_fall_enabled: number;
+  }>();
+  if (!patient) return c.json({ error: 'patient not found' }, 404);
+
+  const conditions = await getConditions(db, id);
+
+  const rows = await db
+    .prepare(
+      `SELECT vi.scheduled_at, v.blood_pressure, v.heart_rate, v.temperature, v.spo2, v.gds
+       FROM visits vi
+       JOIN vitals v ON v.visit_id = vi.id
+       WHERE vi.patient_id = ? AND vi.status = 'selesai'
+       ORDER BY vi.scheduled_at ASC`
+    )
+    .bind(id)
+    .all<{
+      scheduled_at: string;
+      blood_pressure: string;
+      heart_rate: number;
+      temperature: number;
+      spo2: number | null;
+      gds: number | null;
+    }>();
+
+  const trend = rows.results.map((row) => ({
+    scheduled_at: row.scheduled_at,
+    risk_scores: computeRiskScores({
+      age: patient.age,
+      conditions,
+      iotFallEnabled: patient.iot_fall_enabled === 1,
+      latestVital: {
+        bloodPressure: row.blood_pressure,
+        heartRate: row.heart_rate,
+        temperature: row.temperature,
+        spo2: row.spo2,
+        gds: row.gds,
+      },
+    }),
+  }));
+
+  return c.json(trend);
+});
+
 // GET /api/patients/:id/history — riwayat kunjungan + vital (untuk modal & tren risk score)
 app.get('/:id/history', async (c) => {
   const db = c.env.DB;
