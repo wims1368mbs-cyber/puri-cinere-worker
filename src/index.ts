@@ -7,6 +7,8 @@ import visits from './routes/visits';
 import patients from './routes/patients';
 import doctors from './routes/doctors';
 import whatsapp from './routes/whatsapp';
+import callcenter from './routes/callcenter';
+import reports from './routes/reports';
 import auth from './routes/auth';
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -18,6 +20,8 @@ app.route('/api/visits', visits);
 app.route('/api/patients', patients);
 app.route('/api/doctors', doctors);
 app.route('/api/settings/whatsapp', whatsapp);
+app.route('/api/call-center', callcenter);
+app.route('/api/reports', reports);
 app.route('/api/auth', auth);
 
 app.get('/', (c) => c.text('puri-cinere-worker is running'));

@@ -50,6 +50,18 @@ app.get('/', async (c) => {
   return c.json(rows.results);
 });
 
+async function logChange(
+  db: D1Database,
+  visitId: number,
+  changeType: 'created' | 'rescheduled' | 'doctor_changed' | 'status_changed' | 'cancelled',
+  description: string
+) {
+  await db
+    .prepare(`INSERT INTO schedule_changes (visit_id, change_type, description) VALUES (?, ?, ?)`)
+    .bind(visitId, changeType, description)
+    .run();
+}
+
 // POST /api/visits
 app.post('/', async (c) => {
   const db = c.env.DB;
@@ -68,7 +80,10 @@ app.post('/', async (c) => {
     .bind(body.patient_id, body.doctor_id, body.visit_type, body.location, body.scheduled_at)
     .run();
 
-  return c.json({ id: result.meta.last_row_id }, 201);
+  const id = result.meta.last_row_id as number;
+  await logChange(db, id, 'created', `Kunjungan baru dijadwalkan: ${body.scheduled_at} — ${body.visit_type}`);
+
+  return c.json({ id }, 201);
 });
 
 // PUT /api/visits/:id — edit/reschedule a visit
@@ -83,12 +98,60 @@ app.put('/:id', async (c) => {
     scheduled_at: string;
   }>();
 
+  const before = await db
+    .prepare(`SELECT doctor_id, scheduled_at FROM visits WHERE id = ?`)
+    .bind(id)
+    .first<{ doctor_id: number; scheduled_at: string }>();
+
   await db
     .prepare(
       `UPDATE visits SET patient_id = ?, doctor_id = ?, visit_type = ?, location = ?, scheduled_at = ? WHERE id = ?`
     )
     .bind(body.patient_id, body.doctor_id, body.visit_type, body.location, body.scheduled_at, id)
     .run();
+
+  if (before) {
+    if (before.doctor_id !== body.doctor_id) {
+      await logChange(db, id, 'doctor_changed', `Dokter dialihkan (id ${before.doctor_id} → ${body.doctor_id})`);
+    }
+    if (before.scheduled_at !== body.scheduled_at) {
+      await logChange(db, id, 'rescheduled', `Jadwal diubah: ${before.scheduled_at} → ${body.scheduled_at}`);
+    }
+  }
+
+  return c.json({ status: 'ok' });
+});
+
+// POST /api/visits/:id/vitals — pencatatan vital manual oleh dokter saat kunjungan
+app.post('/:id/vitals', async (c) => {
+  const db = c.env.DB;
+  const visitId = Number(c.req.param('id'));
+  const body = await c.req.json<{
+    blood_pressure: string;
+    heart_rate: number;
+    temperature: number;
+    spo2?: number;
+    gds?: number;
+    notes?: string;
+  }>();
+
+  const existing = await db.prepare(`SELECT id FROM vitals WHERE visit_id = ?`).bind(visitId).first<{ id: number }>();
+
+  if (existing) {
+    await db
+      .prepare(
+        `UPDATE vitals SET blood_pressure = ?, heart_rate = ?, temperature = ?, spo2 = ?, gds = ?, notes = ? WHERE visit_id = ?`
+      )
+      .bind(body.blood_pressure, body.heart_rate, body.temperature, body.spo2 ?? null, body.gds ?? null, body.notes ?? '', visitId)
+      .run();
+  } else {
+    await db
+      .prepare(
+        `INSERT INTO vitals (visit_id, blood_pressure, heart_rate, temperature, spo2, gds, notes) VALUES (?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(visitId, body.blood_pressure, body.heart_rate, body.temperature, body.spo2 ?? null, body.gds ?? null, body.notes ?? '')
+      .run();
+  }
 
   return c.json({ status: 'ok' });
 });
@@ -125,7 +188,27 @@ app.patch('/:id/status', async (c) => {
     await db.prepare(`UPDATE visits SET status = ? WHERE id = ?`).bind(status, id).run();
   }
 
+  if (status === 'batal') {
+    await logChange(db, id, 'cancelled', 'Kunjungan dibatalkan');
+  }
+
   return c.json({ status: 'ok' });
+});
+
+// GET /api/visits/schedule-changes?limit= — log perubahan jadwal & pengalihan dokter
+app.get('/schedule-changes', async (c) => {
+  const limit = Number(c.req.query('limit') ?? '20') || 20;
+  const rows = await c.env.DB.prepare(
+    `SELECT sc.id, sc.visit_id, sc.changed_at, sc.change_type, sc.description, sc.changed_by, p.name AS patient_name
+     FROM schedule_changes sc
+     JOIN visits v ON v.id = sc.visit_id
+     JOIN patients p ON p.id = v.patient_id
+     ORDER BY sc.changed_at DESC
+     LIMIT ?`
+  )
+    .bind(limit)
+    .all();
+  return c.json(rows.results);
 });
 
 export default app;
